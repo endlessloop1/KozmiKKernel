@@ -50,6 +50,9 @@
 #define DELAY_KICK_TPS	msecs_to_jiffies(10)
 #define SET_VDPM_AS_476	1
 
+#ifdef CONFIG_CMDLINE_OPTIONS
+int fstchrg_switch = 1;
+#endif
 int force_fast_charge;
 
 static struct workqueue_struct *tps65200_wq;
@@ -79,6 +82,24 @@ static int htc_is_dq_pass;
 #endif
 
 u8 batt_charging_state;
+
+#ifdef CONFIG_CMDLINE_OPTIONS
+static int __init cy8c_read_fstchrg_cmdline(char *fstchrg)
+{
+	if (strcmp(fstchrg, "1") == 0) {
+		printk(KERN_INFO "[cmdline_fstchrg]: FastCharge enabled. | fstchrg='%s'", fstchrg);
+		fstchrg_switch = 1;
+	} else if (strcmp(fstchrg, "0") == 0) {
+		printk(KERN_INFO "[cmdline_fstchrg]: FastCharge disabled. | fstchrg='%s'", fstchrg);
+		fstchrg_switch = 0;
+	} else {
+		printk(KERN_INFO "[cmdline_fstchrg]: No valid input found. FastCharge disabled. | fstchrg='%s'", fstchrg);
+		fstchrg_switch = 0;
+	}
+	return 1;
+}
+__setup("fstchrg=", cy8c_read_fstchrg_cmdline);
+#endif
 
 static void tps65200_set_check_alarm(void)
 {
@@ -365,6 +386,13 @@ int tps_set_charger_ctrl(u32 ctl)
 		alarm_cancel(&tps65200_check_alarm);
 		break;
 	case POWER_SUPPLY_ENABLE_SLOW_CHARGE:
+		#ifdef CONFIG_CMDLINE_OPTIONS
+		if ((fstchrg_switch = 1)) {
+		force_fast_charge = 1;
+		tps_set_charger_ctrl(POWER_SUPPLY_ENABLE_FAST_CHARGE);
+		break;
+		}
+		#endif
 		if (force_fast_charge != 0) {
 		tps_set_charger_ctrl(POWER_SUPPLY_ENABLE_FAST_CHARGE);
 		break;
@@ -933,7 +961,13 @@ static struct i2c_driver tps65200_driver = {
 static int __init sensors_tps65200_init(void)
 {
 	int res;
+#ifdef CONFIG_CMDLINE_OPTIONS
+	if ((fstchrg_switch = 0)) {
 	force_fast_charge = 0;
+}
+#else
+	force_fast_charge = 0;
+#endif
 	tps65200_low_chg = 0;
 	chg_stat_enabled = 0;
 	spin_lock_init(&chg_stat_lock);
