@@ -18,8 +18,6 @@
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/delay.h>
-#include <linux/kobject.h>
-#include <linux/sysfs.h>
 #include <asm/mach-types.h>
 #include <linux/irq.h>
 #include <linux/gpio.h>
@@ -50,7 +48,9 @@
 #define DELAY_KICK_TPS	msecs_to_jiffies(10)
 #define SET_VDPM_AS_476	1
 
-int force_fast_charge;
+#ifdef CONFIG_CMDLINE_OPTIONS
+int force_fast_charge = 1;
+#endif
 
 static struct workqueue_struct *tps65200_wq;
 static struct work_struct chg_stat_work;
@@ -76,6 +76,24 @@ static int tps65200_vdpm_chg = 0;
 
 #ifdef CONFIG_SUPPORT_DQ_BATTERY
 static int htc_is_dq_pass;
+#endif
+
+#ifdef CONFIG_CMDLINE_OPTIONS
+static int __init cy8c_read_fstchrg_cmdline(char *fstchrg)
+{
+	if (strcmp(fstchrg, "1") == 0) {
+		printk(KERN_INFO "[cmdline_fstchrg]: FastCharge enabling. | fstchrg='%s'", fstchrg);
+		force_fast_charge = 1;
+	} else if (strcmp(fstchrg, "0") == 0) {
+		printk(KERN_INFO "[cmdline_fstchrg]: FastCharge disabled. | fstchrg='%s'", fstchrg);
+		force_fast_charge = 0;
+	} else {
+		printk(KERN_INFO "[cmdline_fstchrg]: No valid input found. FastCharge disabled. | fstchrg='%s'", fstchrg);
+		force_fast_charge = 0;
+	}
+	return 1;
+}
+__setup("fstchrg=", cy8c_read_fstchrg_cmdline);
 #endif
 
 u8 batt_charging_state;
@@ -365,10 +383,13 @@ int tps_set_charger_ctrl(u32 ctl)
 		alarm_cancel(&tps65200_check_alarm);
 		break;
 	case POWER_SUPPLY_ENABLE_SLOW_CHARGE:
-		if (force_fast_charge != 0) {
+#ifdef CONFIG_CMDLINE_OPTIONS
+		if ((force_fast_charge > 0)) {
+		printk(KERN_INFO "[cmdline_fstchrg]: FastCharge enabled.");
 		tps_set_charger_ctrl(POWER_SUPPLY_ENABLE_FAST_CHARGE);
 		break;
 		}
+#endif
 	case POWER_SUPPLY_ENABLE_WIRELESS_CHARGE:
 		tps65200_dump_register();
 		tps65200_i2c_write_byte(0x29, 0x01);
@@ -649,48 +670,6 @@ int tps_set_charger_ctrl(u32 ctl)
 }
 EXPORT_SYMBOL(tps_set_charger_ctrl);
 
-/* sysfs interface */
-static ssize_t force_fast_charge_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-return sprintf(buf, "%d\n", force_fast_charge);
-}
-
-static ssize_t force_fast_charge_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
-{
-sscanf(buf, "%du", &force_fast_charge);
-return count;
-}
-
-
-static struct kobj_attribute force_fast_charge_attribute =
-__ATTR(force_fast_charge, 0666, force_fast_charge_show, force_fast_charge_store);
-
-static struct attribute *attrs[] = {
-&force_fast_charge_attribute.attr,
-NULL,
-};
-
-static struct attribute_group attr_group = {
-.attrs = attrs,
-};
-
-static struct kobject *force_fast_charge_kobj;
-
-int force_fast_charge_init(void)
-{
-int retval;
-
-        force_fast_charge_kobj = kobject_create_and_add("fast_charge", kernel_kobj);
-        if (!force_fast_charge_kobj) {
-                return -ENOMEM;
-        }
-        retval = sysfs_create_group(force_fast_charge_kobj, &attr_group);
-        if (retval)
-                kobject_put(force_fast_charge_kobj);
-        return retval;
-}
-/* end sysfs interface */
-
 #if 0
 static int tps65200_detect(struct i2c_client *client, int kind,
 			 struct i2c_board_info *info)
@@ -933,7 +912,9 @@ static struct i2c_driver tps65200_driver = {
 static int __init sensors_tps65200_init(void)
 {
 	int res;
+#ifdef CONFIG_CMDLINE_OPTIONS
 	force_fast_charge = 0;
+#endif
 	tps65200_low_chg = 0;
 	chg_stat_enabled = 0;
 	spin_lock_init(&chg_stat_lock);
@@ -947,7 +928,6 @@ static int __init sensors_tps65200_init(void)
 static void __exit sensors_tps65200_exit(void)
 {
 	kfree(chg_int_data);
-	kobject_put(force_fast_charge_kobj);
 	i2c_del_driver(&tps65200_driver);
 }
 
@@ -956,5 +936,4 @@ MODULE_DESCRIPTION("tps65200 driver");
 MODULE_LICENSE("GPL");
 
 fs_initcall(sensors_tps65200_init);
-module_init(force_fast_charge_init);
 module_exit(sensors_tps65200_exit);
