@@ -2236,37 +2236,26 @@ static void __init msm8x60_init_dsps(void)
 /* Note: must be multiple of 4096 */
 #define MSM_FB_SIZE roundup(MSM_FB_PRIM_BUF_SIZE + MSM_FB_EXT_BUF_SIZE, 4096)
 
-#define MSM_PMEM_SF_SIZE			0x1000000 /* 16 Mbytes */
+#define MSM_PMEM_SF_SIZE			0x2000000 /* 32 Mbytes */
 #define MSM_PMEM_ADSP_SIZE			0x2700000
 #define MSM_PMEM_ADSP2_SIZE			0x800000 /* 1152 * 1920 * 1.5 * 2 */
 #define MSM_PMEM_AUDIO_SIZE			0x239000
 #define MSM_PMEM_TZCOM_SIZE			0xC7000
-
 #define MSM_PMEM_SF_BASE			(0x40400000)
 #define MSM_PMEM_ADSP2_BASE			(0x80000000 - MSM_PMEM_ADSP2_SIZE)
 #define MSM_PMEM_ADSP_BASE			(MSM_PMEM_ADSP2_BASE - MSM_PMEM_ADSP_SIZE)
 #define MSM_PMEM_TZCOM_BASE			(MSM_PMEM_SF_BASE + MSM_PMEM_SF_SIZE)
-#define MSM_FB_WRITEBACK_BASE		(MSM_PMEM_TZCOM_BASE + MSM_PMEM_TZCOM_SIZE)
-#define MSM_FB_BASE					(MSM_FB_WRITEBACK_BASE + MSM_FB_WRITEBACK_SIZE)
+#define MSM_FB_WRITEBACK_BASE			(MSM_PMEM_TZCOM_BASE + MSM_PMEM_TZCOM_SIZE)
+#define MSM_FB_BASE				(MSM_FB_WRITEBACK_BASE + MSM_FB_WRITEBACK_SIZE)
 #define MSM_PMEM_AUDIO_BASE			(MSM_FB_BASE + MSM_FB_SIZE)
-
 #define MSM_SMI_BASE				0x38000000
 #define MSM_SMI_SIZE				0x4000000
-
-/* Kernel SMI PMEM Region for video core, used for Firmware */
-/* and encoder, decoder scratch buffers */
-/* Kernel SMI PMEM Region Should always precede the user space */
-/* SMI PMEM Region, as the video core will use offset address */
-/* from the Firmware base */
-#define KERNEL_SMI_BASE			 (MSM_SMI_BASE)
-#define KERNEL_SMI_SIZE			 0x400000
-
-/* User space SMI PMEM Region for video core*/
-/* used for encoder, decoder input & output buffers  */
-#define USER_SMI_BASE			   (KERNEL_SMI_BASE + KERNEL_SMI_SIZE)
-#define USER_SMI_SIZE			   (MSM_SMI_SIZE - KERNEL_SMI_SIZE)
-#define MSM_PMEM_SMIPOOL_BASE	   USER_SMI_BASE
-#define MSM_PMEM_SMIPOOL_SIZE	   USER_SMI_SIZE
+#define KERNEL_SMI_BASE			 	(MSM_SMI_BASE)
+#define KERNEL_SMI_SIZE			 	0x400000
+#define USER_SMI_BASE			   	(KERNEL_SMI_BASE + KERNEL_SMI_SIZE)
+#define USER_SMI_SIZE			   	(MSM_SMI_SIZE - KERNEL_SMI_SIZE)
+#define MSM_PMEM_SMIPOOL_BASE	   		USER_SMI_BASE
+#define MSM_PMEM_SMIPOOL_SIZE	   		USER_SMI_SIZE
 
 static unsigned fb_size;
 static int __init fb_size_setup(char *p)
