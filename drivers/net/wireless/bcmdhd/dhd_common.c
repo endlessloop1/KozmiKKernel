@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: dhd_common.c 288105 2011-10-06 01:58:02Z $
+ * $Id: dhd_common.c 329682 2012-04-26 09:20:38Z $
  */
 #include <typedefs.h>
 #include <osl.h>
@@ -91,9 +91,6 @@ extern int dhd_change_mtu(dhd_pub_t *dhd, int new_mtu, int ifidx);
 bool ap_cfg_running = FALSE;
 bool ap_fw_loaded = FALSE;
 
-#if defined(KEEP_ALIVE)
-int dhd_keep_alive_onoff(dhd_pub_t *dhd);
-#endif /* KEEP_ALIVE */
 
 #ifdef DHD_DEBUG
 const char dhd_version[] = "Dongle Host Driver, version " EPI_VERSION_STR "\nCompiled on "
@@ -137,7 +134,7 @@ enum {
 };
 
 const bcm_iovar_t dhd_iovars[] = {
-	{"version", 	IOV_VERSION,	0,	IOVT_BUFFER,	sizeof(dhd_version) },
+	{"version",	IOV_VERSION,	0,	IOVT_BUFFER,	sizeof(dhd_version) },
 #ifdef DHD_DEBUG
 	{"msglevel",	IOV_MSGLEVEL,	0,	IOVT_UINT32,	0 },
 #endif /* DHD_DEBUG */
@@ -193,14 +190,14 @@ dhd_common_init(osl_t *osh)
 
 #ifdef CONFIG_BCMDHD_FW_PATH
 	bcm_strncpy_s(fw_path, sizeof(fw_path), CONFIG_BCMDHD_FW_PATH, MOD_PARAM_PATHLEN-1);
-#else /* CONFIG_BCM4329_FW_PATH */
+#else /* CONFIG_BCMDHD_FW_PATH */
 	fw_path[0] = '\0';
-#endif /* CONFIG_BCM4329_FW_PATH */
+#endif /* CONFIG_BCMDHD_FW_PATH */
 #ifdef CONFIG_BCMDHD_NVRAM_PATH
 	bcm_strncpy_s(nv_path, sizeof(nv_path), CONFIG_BCMDHD_NVRAM_PATH, MOD_PARAM_PATHLEN-1);
-#else /* CONFIG_BCM4329_NVRAM_PATH */
+#else /* CONFIG_BCMDHD_NVRAM_PATH */
 	nv_path[0] = '\0';
-#endif /* CONFIG_BCM4329_NVRAM_PATH */
+#endif /* CONFIG_BCMDHD_NVRAM_PATH */
 #ifdef SOFTAP
 	fw_path2[0] = '\0';
 #endif
@@ -303,7 +300,7 @@ dhd_wl_ioctl(dhd_pub_t *dhd_pub, int ifindex, wl_ioctl_t *ioc, void *buf, int le
 	dhd_os_proto_block(dhd_pub);
 
 	ret = dhd_prot_ioctl(dhd_pub, ifindex, ioc, buf, len);
-	if (!ret)
+	if (ret)
 		dhd_os_check_hang(dhd_pub, ifindex, ret);
 
 	dhd_os_proto_unblock(dhd_pub);
@@ -339,6 +336,11 @@ dhd_doiovar(dhd_pub_t *dhd_pub, const bcm_iovar_t *vi, uint32 actionid, const ch
 
 	case IOV_SVAL(IOV_MSGLEVEL):
 		dhd_msg_level = int_val;
+#ifdef WL_CFG80211
+		/* Enable DHD and WL logs in oneshot */
+		if (dhd_msg_level & DHD_WL_VAL)
+			wl_cfg80211_enable_trace(dhd_msg_level);
+#endif
 		break;
 	case IOV_GVAL(IOV_BCMERRORSTR):
 		bcm_strncpy_s((char *)arg, len, bcmerrorstr(dhd_pub->bcmerror), BCME_STRLEN);
@@ -571,21 +573,14 @@ dhd_prec_enq(dhd_pub_t *dhdp, struct pktq *q, void *pkt, int prec)
 			return FALSE;		/* refuse newer (incoming) packet */
 		/* Evict packet according to discard policy */
 		p = discard_oldest ? pktq_pdeq(q, eprec) : pktq_pdeq_tail(q, eprec);
-		if (p == NULL) {
-			DHD_ERROR(("%s: pktq_penq() failed, oldest %d.",
-				__FUNCTION__, discard_oldest));
-			ASSERT(p);
-		}
+		ASSERT(p);
 
 		PKTFREE(dhdp->osh, p, TRUE);
 	}
 
 	/* Enqueue */
 	p = pktq_penq(q, prec, pkt);
-	if (p == NULL) {
-		DHD_ERROR(("%s: pktq_penq() failed.", __FUNCTION__));
-		ASSERT(p);
-	}
+	ASSERT(p);
 
 	return TRUE;
 }
@@ -867,6 +862,8 @@ wl_show_host_event(wl_event_msg_t *event, void *event_data)
 		break;
 
 	case WLC_E_SCAN_COMPLETE:
+	case WLC_E_ASSOC_REQ_IE:
+	case WLC_E_ASSOC_RESP_IE:
 	case WLC_E_PMKID_CACHE:
 		DHD_EVENT(("MACEVENT: %s\n", event_name));
 		break;
@@ -998,6 +995,9 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata,
 	reason = ntoh32_ua((void *)&event->reason);
 	datalen = ntoh32_ua((void *)&event->datalen);
 	evlen = datalen + sizeof(bcm_event_t);
+
+	DHD_TRACE(("RX: event_type:%d flags:%d status:%d reason:%d \n",
+								type, flags, status, reason));
 
 	switch (type) {
 #ifdef PROP_TXSTATUS
@@ -1168,7 +1168,7 @@ dhd_print_buf(void *pbuf, int len, int bytes_per_line)
 #define strtoul(nptr, endptr, base) bcm_strtoul((nptr), (endptr), (base))
 
 /* Convert user's input in hex pattern to byte-size mask */
-int
+static int
 wl_pattern_atoh(char *src, char *dst)
 {
 	int i;
@@ -1191,115 +1191,6 @@ wl_pattern_atoh(char *src, char *dst)
 	}
 	return i;
 }
-
-#ifdef CUSTOMER_HW2
-/* HTC_CSP_START */
-extern bool hasDLNA;
-extern char ip_str[32];
-/* HTC_CSP_END */
-int dhd_set_pktfilter(dhd_pub_t * dhd, int add, int id, int offset, char *mask, char *pattern)
-{
-	char 				*str;
-	wl_pkt_filter_t		pkt_filter;
-	wl_pkt_filter_t		*pkt_filterp;
-	int						buf_len;
-	int						str_len;
-	uint32					mask_size;
-	uint32					pattern_size;
-	char buf[256];
-	int pkt_id = id;
-	wl_pkt_filter_enable_t	enable_parm;
-
-	printf("Enter set packet filter\n");
-
-/* HTC_CSP_START */
-#ifdef BCM4329_LOW_POWER
-	if (add == 1 && pkt_id == 105)
-	{
-		printf("MCAST packet filter, hasDLNA is true\n");
-		hasDLNA = true;
-	}
-#endif
-/* HTC_CSP_END */
-
-	/* disable pkt filter */
-	enable_parm.id = htod32(pkt_id);
-	enable_parm.enable = htod32(0);
-	bcm_mkiovar("pkt_filter_enable", (char *)&enable_parm,
-		sizeof(wl_pkt_filter_enable_t), buf, sizeof(buf));
-	dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, buf, sizeof(buf), TRUE, 0);
-
-	/* delete it */
-	bcm_mkiovar("pkt_filter_delete", (char *)&pkt_id, 4, buf, sizeof(buf));
-	dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, buf, sizeof(buf), TRUE, 0);
-
-	if (!add) {
-		return 0;
-	}
-
-	printf("start to add pkt filter %d\n", pkt_id);
-	memset(buf, 0, sizeof(buf));
-	/* add a packet filter pattern */
-	str = "pkt_filter_add";
-	str_len = strlen(str);
-	strncpy(buf, str, str_len);
-	buf[ str_len ] = '\0';
-	buf_len = str_len + 1;
-
-	pkt_filterp = (wl_pkt_filter_t *) (buf + str_len + 1);
-
-	/* Parse packet filter id. */
-	pkt_filter.id = htod32(pkt_id);
-
-	/* Parse filter polarity. */
-	pkt_filter.negate_match = htod32(0);
-
-	/* Parse filter type. */
-	pkt_filter.type = htod32(0);
-
-	/* Parse pattern filter offset. */
-	pkt_filter.u.pattern.offset = htod32(offset);
-
-	/* Parse pattern filter mask. */
-	mask_size =	htod32(wl_pattern_atoh(mask,
-		(char *) pkt_filterp->u.pattern.mask_and_pattern));
-
-/* HTC_CSP_START */
-#ifdef BCM4329_LOW_POWER
-	if (add == 1 && id == 101){
-		memcpy(ip_str, pattern+78, 8);
-		DHD_TRACE(("ip: %s", ip_str));
-	}
-#endif
-/* HTC_CSP_END */
-
-	/* Parse pattern filter pattern. */
-	pattern_size = htod32(wl_pattern_atoh(pattern,
-		(char *) &pkt_filterp->u.pattern.mask_and_pattern[mask_size]));
-
-	if (mask_size != pattern_size) {
-		printf("Mask and pattern not the same size\n");
-		return -EINVAL;
-	}
-
-	pkt_filter.u.pattern.size_bytes = mask_size;
-	buf_len += WL_PKT_FILTER_FIXED_LEN;
-	buf_len += (WL_PKT_FILTER_PATTERN_FIXED_LEN + 2 * mask_size);
-
-	memcpy((char *)pkt_filterp, &pkt_filter,
-		WL_PKT_FILTER_FIXED_LEN + WL_PKT_FILTER_PATTERN_FIXED_LEN);
-
-	dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, buf, buf_len, TRUE, 0);
-
-	enable_parm.id = htod32(pkt_id);
-	enable_parm.enable = htod32(1);
-	bcm_mkiovar("pkt_filter_enable", (char *)&enable_parm,
-		sizeof(wl_pkt_filter_enable_t), buf, sizeof(buf));
-	dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, buf, sizeof(buf), TRUE , 0);
-
-	return 0;
-}
-#endif
 
 void
 dhd_pktfilter_offload_enable(dhd_pub_t * dhd, char *arg, int enable, int master_mode)
@@ -1632,8 +1523,6 @@ dhd_arp_get_arp_hostip_table(dhd_pub_t *dhd, void *buf, int buflen)
 }
 #endif /* ARP_OFFLOAD_SUPPORT  */
 
-
-
 /* send up locally generated event */
 void
 dhd_sendup_event_common(dhd_pub_t *dhdp, wl_event_msg_t *event, void *data)
@@ -1837,17 +1726,21 @@ fail:
 
 /*
  * returns = TRUE if associated, FALSE if not associated
+ * third paramter retval can return error from error
  */
-bool dhd_is_associated(dhd_pub_t *dhd, void *bss_buf)
+bool dhd_is_associated(dhd_pub_t *dhd, void *bss_buf, int *retval)
 {
 	char bssid[6], zbuf[6];
-	int ret = -1;
+	int ret;
 
 	bzero(bssid, 6);
 	bzero(zbuf, 6);
 
 	ret  = dhd_wl_ioctl_cmd(dhd, WLC_GET_BSSID, (char *)&bssid, ETHER_ADDR_LEN, FALSE, 0);
 	DHD_TRACE((" %s WLC_GET_BSSID ioctl res = %d\n", __FUNCTION__, ret));
+
+	if (retval)
+		*retval = ret;
 
 	if (ret == BCME_NOTASSOCIATED) {
 		DHD_TRACE(("%s: not associated! res:%d\n", __FUNCTION__, ret));
@@ -1885,7 +1778,7 @@ dhd_get_dtim_skip(dhd_pub_t *dhd)
 		bcn_li_dtim = dhd->dtim_skip;
 
 	/* Check if associated */
-	if (dhd_is_associated(dhd, NULL) == FALSE) {
+	if (dhd_is_associated(dhd, NULL, NULL) == FALSE) {
 		DHD_TRACE(("%s NOT assoc ret %d\n", __FUNCTION__, ret));
 		goto exit;
 	}
@@ -1928,20 +1821,24 @@ exit:
 bool dhd_check_ap_wfd_mode_set(dhd_pub_t *dhd)
 {
 #ifdef  WL_CFG80211
+#ifndef WL_ENABLE_P2P_IF
+	/* To be back compatble with ICS MR1 release where p2p interface
+	 * disable but wlan0 used for p2p
+	 */
 	if (((dhd->op_mode & HOSTAPD_MASK) == HOSTAPD_MASK) ||
-		((dhd->op_mode & WFD_MASK) == WFD_MASK))
+		((dhd->op_mode & WFD_MASK) == WFD_MASK)) {
 		return TRUE;
+	}
 	else
-#endif /* WL_CFG80211 */
-		return FALSE;
-}
-
-bool dhd_check_ap_mode_set(dhd_pub_t *dhd)
-{
-#ifdef WL_CFG80211
-	if ((dhd->op_mode & HOSTAPD_MASK) == HOSTAPD_MASK)
+#else
+	/* concurent mode with p2p interface for wfd and wlan0 for sta */
+	if (((dhd->op_mode & P2P_GO_ENABLED) == P2P_GO_ENABLED) ||
+		((dhd->op_mode & P2P_GC_ENABLED) == P2P_GC_ENABLED)) {
+		DHD_ERROR(("%s P2P enabled for  mode=%d\n", __FUNCTION__, dhd->op_mode));
 		return TRUE;
+	}
 	else
+#endif /* WL_ENABLE_P2P_IF */
 #endif /* WL_CFG80211 */
 		return FALSE;
 }
@@ -1993,10 +1890,12 @@ dhd_pno_enable(dhd_pub_t *dhd, int pfn_enabled)
 
 	memset(iovbuf, 0, sizeof(iovbuf));
 
-	if ((pfn_enabled) && (dhd_is_associated(dhd, NULL) == TRUE)) {
+#ifndef WL_SCHED_SCAN
+	if ((pfn_enabled) && (dhd_is_associated(dhd, NULL, NULL) == TRUE)) {
 		DHD_ERROR(("%s pno is NOT enable : called in assoc mode , ignore\n", __FUNCTION__));
-		//return ret;
+		return ret;
 	}
+#endif /* !WL_SCHED_SCAN */
 
 	/* Enable/disable PNO */
 	if ((ret = bcm_mkiovar("pfn", (char *)&pfn_enabled, 4, iovbuf, sizeof(iovbuf))) > 0) {
@@ -2030,13 +1929,10 @@ dhd_pno_set(dhd_pub_t *dhd, wlc_ssid_t* ssids_local, int nssid, ushort scan_fr,
 
 	DHD_TRACE(("%s nssid=%d nchan=%d\n", __FUNCTION__, nssid, scan_fr));
 
-	if ((!dhd) || (!ssids_local)) {
+	if ((!dhd) && (!ssids_local)) {
 		DHD_ERROR(("%s error exit\n", __FUNCTION__));
-#ifdef HTC_KlocWork
-		return err;
-#else
 		err = -1;
-#endif
+		return err;
 	}
 
 	if (dhd_check_ap_wfd_mode_set(dhd) == TRUE)
@@ -2157,10 +2053,6 @@ int dhd_keep_alive_onoff(dhd_pub_t *dhd)
 	int					str_len;
 	int res 				= -1;
 
-#ifdef HTC_KlocWork
-	memset(&mkeep_alive_pkt, 0, sizeof(mkeep_alive_pkt));
-#endif
-
 	if (dhd_check_ap_wfd_mode_set(dhd) == TRUE)
 		return (res);
 
@@ -2179,7 +2071,7 @@ int dhd_keep_alive_onoff(dhd_pub_t *dhd)
 	mkeep_alive_pkt.keep_alive_id = 0;
 	mkeep_alive_pkt.len_bytes = 0;
 	buf_len += WL_MKEEP_ALIVE_FIXED_LEN;
-	/* Keep-alive attributes are set in local	variable (mkeep_alive_pkt), and
+	/* Keep-alive attributes are set in local variable (mkeep_alive_pkt), and
 	 * then memcpy'ed into buffer (mkeep_alive_pktp) since there is no
 	 * guarantee that the buffer is properly aligned.
 	 */
@@ -2190,6 +2082,7 @@ int dhd_keep_alive_onoff(dhd_pub_t *dhd)
 	return res;
 }
 #endif /* defined(KEEP_ALIVE) */
+
 /* Android ComboSCAN support */
 
 /*
@@ -2199,11 +2092,7 @@ int
 wl_iw_parse_data_tlv(char** list_str, void *dst, int dst_size, const char token,
                      int input_size, int *bytes_left)
 {
-#ifdef HTC_KlocWork
-	char* str = NULL;
-#else
 	char* str = *list_str;
-#endif
 	uint16 short_temp;
 	uint32 int_temp;
 
@@ -2211,9 +2100,7 @@ wl_iw_parse_data_tlv(char** list_str, void *dst, int dst_size, const char token,
 		DHD_ERROR(("%s error paramters\n", __FUNCTION__));
 		return -1;
 	}
-#ifdef HTC_KlocWork
-	str = *list_str;
-#endif
+
 	/* Clean all dest bytes */
 	memset(dst, 0, dst_size);
 	while (*bytes_left > 0) {
@@ -2254,20 +2141,14 @@ int
 wl_iw_parse_channel_list_tlv(char** list_str, uint16* channel_list,
                              int channel_num, int *bytes_left)
 {
-#ifdef HTC_KlocWork
-	char* str = NULL;
-#else
 	char* str = *list_str;
-#endif
 	int idx = 0;
 
 	if ((list_str == NULL) || (*list_str == NULL) ||(bytes_left == NULL) || (*bytes_left < 0)) {
 		DHD_ERROR(("%s error paramters\n", __FUNCTION__));
 		return -1;
 	}
-#ifdef HTC_KlocWork
-	str = *list_str;
-#endif
+
 	while (*bytes_left > 0) {
 
 		if (str[0] != CSCAN_TLV_TYPE_CHANNEL_IE) {
@@ -2306,20 +2187,14 @@ wl_iw_parse_channel_list_tlv(char** list_str, uint16* channel_list,
 int
 wl_iw_parse_ssid_list_tlv(char** list_str, wlc_ssid_t* ssid, int max, int *bytes_left)
 {
-#ifdef HTC_KlocWork
-	char* str = NULL;
-#else
-	char* str = *list_str;
-#endif
+	char* str;
 	int idx = 0;
 
 	if ((list_str == NULL) || (*list_str == NULL) || (*bytes_left < 0)) {
 		DHD_ERROR(("%s error paramters\n", __FUNCTION__));
 		return -1;
 	}
-#ifdef HTC_KlocWork
 	str = *list_str;
-#endif
 	while (*bytes_left > 0) {
 
 		if (str[0] != CSCAN_TLV_TYPE_SSID_IE) {
@@ -2411,11 +2286,7 @@ wl_iw_parse_ssid_list(char** list_str, wlc_ssid_t* ssid, int idx, int max)
 			ssid[idx].SSID_len = 0;
 
 		if (idx < max) {
-#ifdef HTC_KlocWork
-            bcm_strncpy_s((char*)ssid[idx].SSID, sizeof(ssid[idx].SSID), str, DOT11_MAX_SSID_LEN);
-#else
-            bcm_strcpy_s((char*)ssid[idx].SSID, sizeof(ssid[idx].SSID), str);
-#endif
+			bcm_strcpy_s((char*)ssid[idx].SSID, sizeof(ssid[idx].SSID), str);
 			ssid[idx].SSID_len = strlen(str);
 		}
 		idx++;
